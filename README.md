@@ -1,5 +1,4 @@
-# Recidive_prison-Analyse_survie
-Analyse de survie - Récidive des délinquants libérés de prison
+# Analyse de survie - Récidive des délinquants libérés de prison
 
 
 Notre jeu de données est composé de 3716 individus ayant été libérés de prison en 2013.
