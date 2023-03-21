@@ -1,0 +1,520 @@
+Analyse de survie - Récidive des délinquants libérés de prison 
+========================================================
+author: Meyssa BEDDAR
+date: 
+autosize: true
+ 
+
+Présentation de l'analyse
+========================================================
+
+<font size = "2">
+
+Notre jeu de données est composé de 3716 individus ayant été libérés de prison en 2013.
+
+
+Il renseigne différentes informations, dont notamment le fait d'avoir ou non récidivé dans les 3 ans et, le cas échant, au bout de combien de temps.
+
+**Objectifs de l'analyse :**
+- Déterminer les risques de récidive dans le temps,
+- Déterminer s'il existe des différences selon :
+  - le profil (age, origine ethnique et sexe),
+  - la présence de mesures de prévention,
+  - la raison de la libération,
+  - le type d'infraction commise initialement.
+
+</font>
+
+***
+
+<font size = "4">
+
+**Plan :**
+
+## I. Exploration du jeu de données
+
+
+
+## II. Survie générale et délais de récidive
+####  a) Taux de récidive
+####  b) Délais de récidive
+####  c) Estimation de la courbe de survie de Kaplan-Meier
+
+
+
+## III. Récidive selon les groupes
+####  a) Récidive selon l'âge
+####  b) Récidive selon le sexe
+####  c) Récidive selon le type d'infraction
+
+
+
+## IV. Vérification de l'hypothèse de proportionnalité
+
+## V. Prédiction de la récidive
+
+## VI. Conclusion
+
+</font>
+
+Exploration du jeu de données
+========================================================
+
+```{r, include=FALSE}
+######################################IMPORTATION DU JEU DE DONNEES ET DES LIBRAIRIES NECESSAIRES
+
+# Importation des librairies
+library(dplyr)
+library(survminer)
+library(survival)
+library(Publish)
+library(prodlim)
+library(qdapTools)
+library(timeROC)
+library(prodlim)
+library(pec)
+library(stargazer)
+library(ggplot2)
+
+# Importation du dataset
+recidivism <- read.csv("Recidivism.csv",sep=",",
+                       encoding = "UTF-8")
+
+
+# Filtre sur l'année 2013
+recidivism <- recidivism %>% filter(Fiscal.Year.Released==2013)
+
+####################################CARACTERISTIQUES GENERALES
+
+# Taille du dataset
+dim(recidivism)
+
+# Colonnes du jeu de données
+names(recidivism)
+
+
+
+################################## PREPARATION DES DONNEES
+
+
+### Ajustement de la variable "Days.To.Return" pour les personnes n'ayant pas récidivé au bout de 3 ans
+recidivism$Days.to.Return[recidivism$Return.to.Prison=="No"] <- 1095
+
+### Création de la variable "status" binaire (0 pour les personnes n'étant pas retournées en prison, 1 lorsque c'est le cas)
+recidivism$status <- ifelse(recidivism$Return.to.Prison=="Yes",1,0)
+
+### Conversion en factor pour les variables qualitatives encodées en character
+recidivism[sapply(recidivism, is.character)] <- lapply(recidivism[sapply(recidivism, is.character)], 
+                                       as.factor)
+
+### Regroupement des races et ethnies en 4 modalités : White, Black, Asian, American Indian or Alaska Native
+
+levels(recidivism$Race...Ethnicity)[levels(recidivism$Race...Ethnicity)=="White - Non-Hispanic"] <- "White"
+levels(recidivism$Race...Ethnicity)[levels(recidivism$Race...Ethnicity)=="White - Hispanic"] <- "White"
+levels(recidivism$Race...Ethnicity)[levels(recidivism$Race...Ethnicity)=="White -"] <- "White"
+levels(recidivism$Race...Ethnicity)[levels(recidivism$Race...Ethnicity)=="Black - Non-Hispanic"] <- "Black"
+levels(recidivism$Race...Ethnicity)[levels(recidivism$Race...Ethnicity)=="Black - Hispanic"] <- "Black"
+levels(recidivism$Race...Ethnicity)[levels(recidivism$Race...Ethnicity)=="American Indian or Alaska Native - Non-Hispanic"] <- "American Indian or Alaska Native"
+levels(recidivism$Race...Ethnicity)[levels(recidivism$Race...Ethnicity)=="American Indian or Alaska Native - Hispanic"] <- "American Indian or Alaska Native"
+levels(recidivism$Race...Ethnicity)[levels(recidivism$Race...Ethnicity)=="Asian or Pacific Islander - Non-Hispanic"] <- "Asian"
+
+# Renommage de la variable relative à l'origine ethnique
+recidivism <- rename(recidivism, "Race" = "Race...Ethnicity")
+
+### Regroupement des modalités similaires pour le type de libération
+
+levels(recidivism$Release.Type)[levels(recidivism$Release.Type)=="Paroled to Detainer - INS"] <- "Paroled to Detainer"
+levels(recidivism$Release.Type)[levels(recidivism$Release.Type)=="Paroled to Detainer - Iowa"] <- "Paroled to Detainer"
+levels(recidivism$Release.Type)[levels(recidivism$Release.Type)=="Paroled to Detainer - U.S. Marshall"] <- "Paroled to Detainer"
+levels(recidivism$Release.Type)[levels(recidivism$Release.Type)=="Paroled to Detainer - Out of State"] <- "Paroled to Detainer"
+
+### Fixation de la modalité de référence pour les variables relatives à l'âge et à l'origine
+recidivism$Age.At.Release <- relevel(recidivism$Age.At.Release, ref = "Under 25")
+recidivism$Race <- relevel(recidivism$Race, ref = "White")
+
+### Sélection des varialbes utiles à l'analyse seulement
+recidivism <- recidivism %>% select("Days.to.Return","status",
+                      "Age.At.Release",
+                      "Sex",
+                      "Race",
+                      "Release.Type",
+                      "Target.Population",
+                      "Offense.Type")
+```
+
+
+<font size = "3">
+
+
+**Repartition des variables explicatives**
+
+
+```{r, include=FALSE}
+# Jeu de données dans sa globalité - Répartition des variables
+
+su1 <- sutable(~Age.At.Release+Sex+Race+Release.Type+Target.Population+Offense.Type, data=recidivism)
+publish(su1)
+
+```
+
+
+
+- **Tranches d'âge** :
+  - la plus représentée : 25-34ans (36%),
+  - la moins représentée : 55 ans et plus (5%) 
+
+- **Sexe** :
+  - Seulement 13% (644) de femmes
+  
+- **Race** : 
+  - 73% de personnes blanches et près d'un quart d'afroaméricains,
+  - seulement 3% d'asiatiques et d'indiens d'Amérique/natifs d'Alaska
+ 
+ ***
+
+**Repartition des variables explicatives** 
+ 
+- **Motif de libération** :
+  - le plus représenté : Libération conditionnelle accordée (61%)
+
+- **Mesure de prévention** :
+  - Une majorité de personnes (74%) a bénéficié d'une mesure de prévention de la récidive
+
+- **Type d'infractions** :
+  - Majoritairement relatives à la drogue (33%) et la propriété (30%)
+
+</font>
+
+Survie et délais de récidive
+========================================================
+
+<font size="2">
+
+**Taux de récidive**
+
+
+
+```{r, echo=FALSE,fig.dim = c(4, 3),fig.align="center"}
+# Df pour la répartition de la récidive
+df <- data.frame(
+  group = c("Absence de récidive", "Récidive"),
+  value = c(3082, 1605)
+  )
+
+# Visualisation de la répartition de la récidive
+ggplot(df, aes(x = "", y = value, fill = group)) +
+  labs(title="Répartition de la récidive") +
+  geom_col() +
+  coord_polar(theta = "y")
+```
+
+
+```{r, echo=FALSE}
+# Estimation de la survie de Kaplan Meier
+fit <- survfit(Surv(Days.to.Return, status) ~ 1, data = recidivism)
+#print(fit)
+```
+
+
+**Delais de recidive**
+
+- General :
+
+```{r, echo=FALSE}
+# délais de récidive pour tous
+summary(recidivism$Days.to.Return)
+```
+
+- Pour les personnes ayant récidivé :
+
+
+```{r, echo=FALSE}
+# délais de récidive pour ceux qui ont récidivé
+recidivism %>%
+  filter(recidivism$status == 1) %>%
+  select(Days.to.Return) %>%
+  summary(recidivism)
+```
+
+
+***
+
+**Estimation de la survie générale relative à la récidive**
+
+```{r,echo=FALSE}
+
+# Estimation de la courbe de survie de kaplan meier relative à la récidive
+fit <- prodlim(Hist(Days.to.Return, status) ~ 1, data = recidivism)
+plot(fit,xlab="Temps (en jours)",ylab="Probabilité de survie (non récidive)")
+title(main="Courbe de survie de Kaplan Meier de la récidive")
+
+```
+
+
+</font>
+
+
+
+Récidive selon l'âge
+========================================================
+<font size = "3">
+
+
+**Courbes de survie**
+
+```{r, echo=FALSE,fig.dim = c(10, 8)}
+# Estimation de la courbe de survie de kaplan meier relative à la récidive- selon l'âge
+fit_age <- survfit(Surv(Days.to.Return,status) ~ Age.At.Release,data = recidivism)
+ggsurv <- ggsurvplot(fit_age,conf.int = TRUE) 
+ggsurv$plot <- ggsurv$plot + theme(legend.text = element_text(size = 8))
+ggsurv  
+```
+
+
+***
+
+**Tests de logrank**
+```{r, echo=FALSE}
+# Test du logrank pour la variable age
+survdiff(Surv(Days.to.Return, status) ~ Age.At.Release, data = recidivism)
+```
+
+Le test du log-rank montre des différences significatives des courbes de survie selon les différentes modalités de l'âge.
+
+
+Les risques diminueraient-ils avec l'âge ?
+
+</font>
+
+
+
+
+Récidive selon le sexe 
+========================================================
+<font size = "3">
+
+**Courbes de survie**
+
+```{r, echo=FALSE,fig.dim = c(10, 8)}
+# Estimation de la courbe de survie de kaplan meier relative à la récidive - selon le sexe
+fit_sex <- survfit(Surv(Days.to.Return,status) ~ Sex,data = recidivism)
+ggsurvplot(fit_sex,conf.int = TRUE)
+```
+
+
+***
+
+**Tests de logrank**
+```{r, echo=FALSE}
+# Test du log rank pour le sexe
+survdiff(Surv(Days.to.Return, status) ~ Sex, data = recidivism)
+```
+
+On observe pour le sexe également un résultat significatif. 
+Le fait d'être un homme serait-il un facteur aggravant ?
+
+</font>
+
+
+Récidive selon le type d'infraction
+========================================================
+<font size = "2">
+
+
+
+**Courbes de survie**
+
+```{r, echo=FALSE,fig.dim = c(10, 8)}
+# Estimation de la courbe de survie de kaplan meier relative à la récidive - selon le type d'infraction
+fit_age <- survfit(Surv(Days.to.Return,status) ~ Offense.Type,data = recidivism)
+ggsurv <- ggsurvplot(fit_age,conf.int = TRUE) 
+ggsurv$plot <- ggsurv$plot + theme(legend.text = element_text(size = 8))
+ggsurv  
+```
+
+
+***
+
+
+**Tests de logrank**
+
+
+```{r, echo=FALSE}
+# Test de logrank - Type d'infraction commise
+survdiff(Surv(Days.to.Return, status) ~ Offense.Type, data = recidivism)
+```
+
+```{r, include=FALSE}
+# Test de logrank - Présence de motif de libération
+survdiff(Surv(Days.to.Return, status) ~ Release.Type, data = recidivism)
+```
+
+
+```{r, include=FALSE}
+# Test de logrank - Présence de mesures de prévention
+survdiff(Surv(Days.to.Return, status) ~ Target.Population, data = recidivism)
+```
+
+
+```{r, include=FALSE}
+# Test de logrank - Origine ethnique
+survdiff(Surv(Days.to.Return, status) ~ Race, data = recidivism)
+```
+
+
+Moins de récidive pour les infractions liées à l'ordre public ou violentes ? 
+
+***Note : Les tests de logrank sont significatifs pour l'ensemble des variables.(donc également pour les variables relatives aux mesures de prévention et à l'origine ethnique)*** 
+
+
+</font>
+
+Vérification de l'hypothèse de proportionnalité
+========================================================
+
+
+<font size="3">
+
+
+**Vérification de l'hypothèse de proportionnalité des risques**
+
+```{r, echo=FALSE,fig.dim = c(20, 6)}
+par(mfrow = c(1, 2))
+
+# Modèle de cox sur le motif de libération  
+cox_release_type <- coxph(Surv(Days.to.Return, status)~Release.Type, data = recidivism)
+# Test de l'hypothèse de proportionnalité des risques
+#cox.zph(cox_release_type)
+# Visualisation
+plot(cox.zph(cox_release_type))
+title(main="Motif de libération")
+
+# Modèle de cox sur le fait d'avoir bénéficié d'une mesure de prévention de la récidive
+cox_target <- coxph(Surv(Days.to.Return, status)~Target.Population, data = recidivism)
+# Test de l'hypothèse de proportionnalité des risques
+#cox.zph(cox_release_type)
+# Visualisation
+plot(cox.zph(cox_target))
+title(main="Mesure de prévention")
+```
+
+
+Pour ces deux variables, le test montre des résultats significatifs, on peut alors supposer que les risques ne sont pas proportionnels et donc que nos résultats seraient biaisés en raison d'une influence du temps.
+
+</font>
+
+
+
+  
+```{r, include=FALSE}
+
+#### Modèle de Cox - CoxSeries : analyse des effets variable par variable selon la modalité de référence
+coxseries <- coxphSeries(Surv(Days.to.Return, status)~1,vars=c("Age.At.Release","Sex","Race","Offense.Type"),data=recidivism)
+
+
+publish(coxseries)
+```
+
+
+
+Prédiction  de la récidive
+========================================================
+<font size ="2">
+
+```{r, include=FALSE}
+## Création des deux dataset train et test contenant respectivement 2/3 et 1/3 des données
+set.seed(161121)
+id.train <- sample(x = seq_len(nrow(recidivism)), size = floor(nrow(recidivism)*2/3),replace = FALSE)
+
+# Jeu de données d'entraînement
+recidivism_train <- recidivism[id.train, ]
+# Jeu de données de test
+recidivism_test <- recidivism[-id.train, ]
+```
+
+**Mesure de l'effet des variables**
+
+```{r,echo=FALSE}
+# Analyse de l'effet de toutes les variables
+## Omission des variables ne respectant pas l"hypothèse des risques proportionnels
+cfull <- coxph(Surv(Days.to.Return, status)~Sex+Age.At.Release+Race+Offense.Type,
+               data=recidivism_train)
+publish(cfull)
+```
+
+
+On observe des effets significatifs pour :
+- comparativement aux moins de 25 ans, le fait d'avoir 45 ans ou plus (facteur protecteur);
+- le fait d'être un homme (facteur aggravant) avec environ 1,22 fois plus de risque de récidive; 
+- comparativement aux hommes blancs, le fait d'être asiatique serait un facteur protecteur (70% de risque de récidive en moins) ;
+- comparativement aux infractions liées à la drogue, les personnes ayant réalisé une infraction violente seraient moins à risque (40% de risque en moins), et l'infraction de type autre serait plus à risque (1,3x plus de risque).
+
+
+***
+
+**Prédiction**
+
+- A 6 mois :
+
+```{r,echo=FALSE}
+# Prédiction à 6 mois
+pc_full_182 <- predict(cfull, times=182, recidivism_test)
+auc1 <- with(recidivism_test,timeROC(T=Days.to.Return,delta=status,marker=pc_full_182,times=182,cause=1))
+# Affichage de l'AUC
+auc1
+```
+
+- A 1 an :
+
+```{r,echo=FALSE}
+# Prédiction à 1 an
+pc_full_365 <- predict(cfull, times=365, recidivism_test)
+auc2 <- with(recidivism_test,timeROC(T=Days.to.Return,delta=status,marker=pc_full_365,times=365,cause=1))
+# Affichage de l'AUC
+auc2
+```
+
+- A 2 ans : 
+
+```{r,echo=FALSE}
+# Prédictoin à 2 ans
+pc_full_730 <- predict(cfull, times=730, recidivism_test)
+auc3 <- with(recidivism_test,timeROC(T=Days.to.Return,delta=status,marker=pc_full_730,times=730,cause=1))
+# Affichage de l'AUC
+auc3
+
+```
+
+```{r,include=FALSE}
+# Sélection de variables
+fitcox_aic <- selectCox(Surv(Days.to.Return, status)~Sex+Age.At.Release+Race+Offense.Type,
+                        data=recidivism,rule='aic') 
+# Affichage des variables retenues
+fitcox_aic$In
+
+```
+
+Une sélection de variable a ensuité été effectuée, toutefois, toutes ls variables ayant été sélectionnées, nous obtenons les mêmes résultats.
+
+</font>
+
+
+
+
+Conclusion
+========================================================
+
+
+
+<font size="4">
+
+- **Taux de récidive** au bout de 3 ans de **35%** avec 25% de récidive dans les 650 jours suivant la libération,
+- **Facteurs aggravants** de la récidive :
+  - **Age** (avoir moins de 25 ans),
+  - **Sexe** (être un homme).
+- On ne peut pas se prononcer pour :
+  - la raison de la libération,
+  - le fait d'avoir bénéficié ou non d'une mesure de prévention de la récidive.
+- **Prédiction** la plus efficace **à 2 ans** (**AUC à 60%**).
+
+</font>
